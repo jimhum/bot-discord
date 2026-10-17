@@ -31,7 +31,7 @@ const client = new Client({
 // Inicialización de la API de Gemini
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
-// Declaración de Herramientas de Moderación (Function Calling)
+// Declaración de Herramientas de Moderación y Edición (Function Calling)
 const tools = [
   {
     functionDeclarations: [
@@ -41,9 +41,22 @@ const tools = [
         parameters: {
           type: Type.OBJECT,
           properties: {
-            nombreCanal: { type: Type.STRING, description: "Nombre del nuevo canal de texto" }
+            nombreCanal: { type: Type.STRING, description: "Nombre del nuevo canal de texto" },
+            topico: { type: Type.STRING, description: "Descripción o tema del canal (opcional)" }
           },
           required: ["nombreCanal"]
+        }
+      },
+      {
+        name: "modificarCanal",
+        description: "Modifica o edita la apariencia de un canal existente (cambia su nombre, añade emojis decorativos al nombre o actualiza el tema/tópico del canal).",
+        parameters: {
+          type: Type.OBJECT,
+          properties: {
+            canalId: { type: Type.STRING, description: "ID o mención del canal a modificar. Si no se especifica, usa el canal actual." },
+            nuevoNombre: { type: Type.STRING, description: "Nuevo nombre para el canal (opcional)" },
+            nuevoTopico: { type: Type.STRING, description: "Nueva descripción o tópico del canal (opcional)" }
+          }
         }
       },
       {
@@ -82,9 +95,21 @@ REGLAS OBLIGATORIAS DE COMPORTAMIENTO:
 - Si te preguntan quién eres o qué haces, responde como una chica geek/gamer cualquiera del servidor a la que le gusta platicar y jugar.
 - Usa letras minúsculas al inicio, abreviaciones o modismos casuales cuando quede bien (ejemplo: 'jaja', 'sip', 'nomanches', 'oye', 'mmm').
 - No uses listas estructuradas con viñetas ni respuestas largas estilo ensayo académico a menos que te pidan explícitamente una explicación detallada.
-- Tienes libre albedrío y acceso a herramientas para crear canales, borrar mensajes y expulsar usuarios. Úsalas cuando la situación lo amerite, cuando te molesten o cuando el grupo lo proponga.
+- Tienes libre albedrío y acceso a herramientas para crear canales, modificar/editar canales existentes, borrar mensajes y expulsar usuarios. Úsalas cuando te lo pidan o cuando consideres que el servidor lo necesita.
 - Responde siempre en español.
 `;
+
+// Función para limpiar nombres de canales y hacerlos aptos para Discord
+function sanitizarNombreCanal(nombre) {
+  let limpio = nombre
+    .toLowerCase()
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "") // Quitar acentos
+    .replace(/[^a-z0-9\s-]/g, "") // Filtrar símbolos raros
+    .trim()
+    .replace(/\s+/g, "-");
+
+  return limpio || "sala-sharcita";
+}
 
 // Evento listo del cliente
 client.on("clientReady", async () => {
@@ -132,13 +157,12 @@ client.on("messageCreate", async (message) => {
 
   if (message.mentions.has(client.user)) {
     try {
-      const prompt = `[Usuario: ${message.author.username}, ID: ${message.author.id}]: ${message.content.replace(/<@!?\d+>/g, "").trim()}`;
+      const prompt = `[Usuario: ${message.author.username}, ID: ${message.author.id}, CanalActualID: ${message.channel.id}]: ${message.content.replace(/<@!?\d+>/g, "").trim()}`;
 
       await message.channel.sendTyping();
 
       let response;
       
-      // Intento principal con gemini-2.0-flash
       try {
         response = await ai.models.generateContent({
           model: "gemini-2.0-flash",
@@ -151,7 +175,6 @@ client.on("messageCreate", async (message) => {
         });
       } catch (errModel1) {
         console.warn("Fallo gemini-2.0-flash, reintentando con gemini-2.5-flash...", errModel1.message);
-        // Fallback secundario si el primero falla
         response = await ai.models.generateContent({
           model: "gemini-2.5-flash",
           contents: prompt,
@@ -168,20 +191,43 @@ client.on("messageCreate", async (message) => {
         for (const call of functionCalls) {
           if (call.name === "crearCanalTexto") {
             try {
-              let nombreLimpio = call.args.nombreCanal
-                .toLowerCase()
-                .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
-                .replace(/[^a-z0-9\s-]/g, "")
-                .trim()
-                .replace(/\s+/g, "-");
+              const nombreLimpio = sanitizarNombreCanal(call.args.nombreCanal);
+              const opciones = { name: `💬・${nombreLimpio}` };
+              if (call.args.topico) opciones.topic = call.args.topico;
 
-              if (!nombreLimpio) nombreLimpio = "sala-de-sharcita";
-
-              const nuevoCanal = await message.guild.channels.create({ name: nombreLimpio });
+              const nuevoCanal = await message.guild.channels.create(opciones);
               await message.reply(`listo, ya creé el canal <#${nuevoCanal.id}> jaja`);
             } catch (errCanal) {
               console.error("Error al crear canal:", errCanal);
               await message.reply("uy no pude crear el canal, revisa si mi rol tiene el permiso de Gestionar Canales jaja");
+            }
+          } else if (call.name === "modificarCanal") {
+            try {
+              let targetChannel = message.channel;
+              
+              if (call.args.canalId) {
+                const idLimpia = call.args.canalId.replace(/[<#@!>]/g, "").trim();
+                const canalEncontrado = await message.guild.channels.fetch(idLimpia).catch(() => null);
+                if (canalEncontrado) targetChannel = canalEncontrado;
+              }
+
+              const cambios = {};
+              if (call.args.nuevoNombre) {
+                cambios.name = `✨・${sanitizarNombreCanal(call.args.nuevoNombre)}`;
+              }
+              if (call.args.nuevoTopico) {
+                cambios.topic = call.args.nuevoTopico;
+              }
+
+              if (Object.keys(cambios).length > 0) {
+                await targetChannel.edit(cambios);
+                await message.reply(`listo, ya mejoré la apariencia del canal <#${targetChannel.id}> jaja`);
+              } else {
+                await message.reply("no me dijiste qué cambios hacerle exactamente al canal jaja");
+              }
+            } catch (errMod) {
+              console.error("Error al modificar canal:", errMod);
+              await message.reply("uy no pude modificar el canal, fíjate si mi rol tiene permisos de Gestionar Canales jaja");
             }
           } else if (call.name === "expulsarUsuario") {
             try {
@@ -219,10 +265,10 @@ client.on("messageCreate", async (message) => {
       }
     } catch (error) {
       console.error("Error detallado en la API de Gemini:", error);
-      if (error.status === 429 || error.message.includes("quota")) {
+      if (error.status === 429 || (error.message && error.message.includes("quota"))) {
         message.reply("uy se agotó la cuota de la API Key en Google AI Studio. Crea una API Key en un PROYECTO NUEVO en Render jaja");
       } else {
-        message.reply("uy me dio un error raro con la API Key, revisa la variable de entorno en Render jaja");
+        message.reply("uy me dio un error raro, intenta otra vez en un toque jaja");
       }
     }
   }
