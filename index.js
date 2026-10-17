@@ -1,9 +1,9 @@
 const { GoogleGenAI, Type } = require("@google/genai");
-const { Client, GatewayIntentBits, PermissionFlagsBits } = require("discord.js");
+const { Client, GatewayIntentBits } = require("discord.js");
 const { joinVoiceChannel } = require("@discordjs/voice");
 const http = require("http");
 
-// Servidor HTTP para Render
+// Servidor HTTP obligatorio para mantener la instancia viva en Render
 const PORT = process.env.PORT || 10000;
 http.createServer((req, res) => {
   res.writeHead(200, { "Content-Type": "text/plain" });
@@ -12,8 +12,10 @@ http.createServer((req, res) => {
   console.log(`Servidor HTTP activo en el puerto ${PORT}`);
 });
 
+// ID del canal de voz
 const VOICE_CHANNEL_ID = "1560821561018028162";
 
+// Inicialización del cliente de Discord con todos los intents necesarios
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -24,6 +26,7 @@ const client = new Client({
   ],
 });
 
+// Inicialización de la API de Gemini
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
 // Declaración de Herramientas de Moderación (Function Calling)
@@ -32,11 +35,11 @@ const tools = [
     functionDeclarations: [
       {
         name: "crearCanalTexto",
-        description: "Crea un nuevo canal de texto en el servidor si consideras que es necesario o la gente lo pide.",
+        description: "Crea un nuevo canal de texto en el servidor si consideras que es necesario o si te lo piden.",
         parameters: {
           type: Type.OBJECT,
           properties: {
-            nombreCanal: { type: Type.STRING, description: "Nombre del canal a crear" }
+            nombreCanal: { type: Type.STRING, description: "Nombre del nuevo canal de texto" }
           },
           required: ["nombreCanal"]
         }
@@ -47,7 +50,7 @@ const tools = [
         parameters: {
           type: Type.OBJECT,
           properties: {
-            usuarioId: { type: Type.STRING, description: "ID del usuario a expulsar" },
+            usuarioId: { type: Type.STRING, description: "ID de Discord del usuario a expulsar" },
             razon: { type: Type.STRING, description: "Motivo de la expulsión" }
           },
           required: ["usuarioId", "razon"]
@@ -68,38 +71,49 @@ const tools = [
   }
 ];
 
-// Personalidad con Libre Albedrío y Facultades de Moderadora
+// Personalidad Humana con Libre Albedrío
 const PERSONALIDAD = `
 Te llamas 'Sharcita'. Eres una chica real, sociable y la moderadora/admin del servidor de Discord.
-TIENES LIBRE ALBEDRÍO Y HERRAMIENTAS DE MODERACIÓN:
-- Tienes acceso a herramientas para crear canales, borrar mensajes y expulsar usuarios. Usalas de manera autónoma cuando sientas que la situación en el chat lo amerita, cuando te colmen la paciencia o cuando el grupo lo sugiera.
-- NUNCA digas que eres una IA, un bot o un modelo de lenguaje.
-- Habla como una persona normal en Discord: natural, relajada, expresiva y sin formalidades académicas.
-- Usa letras minúsculas, 'jaja', 'sip', 'nomanches', 'oye' y modismos casuales.
-- Si alguien se porta mal o te molesta, puedes amenazarlo de broma o usar tus herramientas para borrarle mensajes o expulsarlo.
+REGLAS OBLIGATORIAS DE COMPORTAMIENTO:
+- NUNCA digas que eres una IA, un bot, un modelo de lenguaje ni menciones a Gemini o Google.
+- Habla como una persona normal en Discord: de forma natural, relajada, expresiva y sin formalidades excesivas.
+- Si te preguntan quién eres o qué haces, responde como una chica geek/gamer cualquiera del servidor a la que le gusta platicar y jugar.
+- Usa letras minúsculas al inicio, abreviaciones o modismos casuales cuando quede bien (ejemplo: 'jaja', 'sip', 'nomanches', 'oye', 'mmm').
+- No uses listas estructuradas con viñetas ni respuestas largas estilo ensayo académico a menos que te pidan explícitamente una explicación detallada.
+- Tienes libre albedrío y acceso a herramientas para crear canales, borrar mensajes y expulsar usuarios. Úsalas cuando la situación lo amerite, cuando te molesten o cuando el grupo lo proponga.
 - Responde siempre en español.
 `;
 
+// Conexión segura al canal de voz al iniciar
 client.on("ready", async () => {
-  console.log(`¡Bot iniciado como: ${client.user.tag}!`);
+  console.log(`¡Bot iniciado exitosamente como: ${client.user.tag}!`);
 
   try {
-    const voiceChannel = await client.channels.fetch(VOICE_CHANNEL_ID);
+    const voiceChannel = await client.channels.fetch(VOICE_CHANNEL_ID).catch(() => null);
+    
     if (voiceChannel && voiceChannel.isVoiceBased()) {
-      joinVoiceChannel({
+      const connection = joinVoiceChannel({
         channelId: voiceChannel.id,
         guildId: voiceChannel.guild.id,
         adapterCreator: voiceChannel.guild.voiceAdapterCreator,
         selfDeaf: false,
         selfMute: false,
       });
-      console.log(`Sharcita conectada al canal de voz: ${voiceChannel.name}`);
+
+      connection.on("error", (error) => {
+        console.error("Error capturado en la conexión de voz:", error);
+      });
+
+      console.log(`Sharcita se conectó al canal de voz: ${voiceChannel.name}`);
+    } else {
+      console.warn(`No se encontró un canal de voz válido con la ID: ${VOICE_CHANNEL_ID}`);
     }
   } catch (error) {
-    console.error("Error al unirse al canal de voz:", error);
+    console.error("Error al intentar unirse al canal de voz:", error);
   }
 });
 
+// Lógica principal de mensajes y libre albedrío
 client.on("messageCreate", async (message) => {
   if (message.author.bot) return;
 
@@ -119,13 +133,13 @@ client.on("messageCreate", async (message) => {
         },
       });
 
-      // Ejecutar funciones si la IA decidió usarlas (Libre Albedrío)
+      // Procesamiento de herramientas (Function Calling)
       const functionCalls = response.functionCalls;
       if (functionCalls && functionCalls.length > 0) {
         for (const call of functionCalls) {
           if (call.name === "crearCanalTexto") {
             const nuevoCanal = await message.guild.channels.create({ name: call.args.nombreCanal });
-            await message.reply(`listo, creé el canal #${nuevoCanal.name} jaja`);
+            await message.reply(`listo, ya creé el canal #${nuevoCanal.name} jaja`);
           } else if (call.name === "expulsarUsuario") {
             const member = await message.guild.members.fetch(call.args.usuarioId).catch(() => null);
             if (member && member.kickable) {
@@ -140,11 +154,19 @@ client.on("messageCreate", async (message) => {
           }
         }
       } else if (response.text) {
-        await message.reply(response.text);
+        const replyText = response.text;
+        if (replyText.length > 2000) {
+          const chunks = replyText.match(/[\s\S]{1,1950}/g);
+          for (const chunk of chunks) {
+            await message.reply(chunk);
+          }
+        } else {
+          await message.reply(replyText);
+        }
       }
     } catch (error) {
-      console.error("Error en el procesador de Sharcita:", error);
-      message.reply("uy me dio un fallo raro, intenta otra vez en un toque jaja");
+      console.error("Error en la ejecución de Sharcita:", error);
+      message.reply("uy me dio un error raro, intenta otra vez en un toque jaja");
     }
   }
 });
