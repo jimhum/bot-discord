@@ -1,5 +1,5 @@
-const { GoogleGenAI } = require("@google/genai");
-const { Client, GatewayIntentBits } = require("discord.js");
+const { GoogleGenAI, Type } = require("@google/genai");
+const { Client, GatewayIntentBits, PermissionFlagsBits } = require("discord.js");
 const { joinVoiceChannel } = require("@discordjs/voice");
 const http = require("http");
 
@@ -12,42 +12,79 @@ http.createServer((req, res) => {
   console.log(`Servidor HTTP activo en el puerto ${PORT}`);
 });
 
-// ID del canal de voz
 const VOICE_CHANNEL_ID = "1560821561018028162";
 
-// Cliente de Discord con Intenciones de Voz activas
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
-    GatewayIntentBits.GuildVoiceStates, // Requerido para ver canales de voz
+    GatewayIntentBits.GuildVoiceStates,
+    GatewayIntentBits.GuildMembers,
   ],
 });
 
-// Configuración de la IA
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
-// Personalidad Humana para Sharcita
+// Declaración de Herramientas de Moderación (Function Calling)
+const tools = [
+  {
+    functionDeclarations: [
+      {
+        name: "crearCanalTexto",
+        description: "Crea un nuevo canal de texto en el servidor si consideras que es necesario o la gente lo pide.",
+        parameters: {
+          type: Type.OBJECT,
+          properties: {
+            nombreCanal: { type: Type.STRING, description: "Nombre del canal a crear" }
+          },
+          required: ["nombreCanal"]
+        }
+      },
+      {
+        name: "expulsarUsuario",
+        description: "Expulsa a un usuario del servidor si está molestando, haciendo spam o rompiendo las reglas.",
+        parameters: {
+          type: Type.OBJECT,
+          properties: {
+            usuarioId: { type: Type.STRING, description: "ID del usuario a expulsar" },
+            razon: { type: Type.STRING, description: "Motivo de la expulsión" }
+          },
+          required: ["usuarioId", "razon"]
+        }
+      },
+      {
+        name: "borrarMensajes",
+        description: "Elimina una cantidad de mensajes recientes en el canal si hay spam o desorden.",
+        parameters: {
+          type: Type.OBJECT,
+          properties: {
+            cantidad: { type: Type.NUMBER, description: "Número de mensajes a borrar (entre 1 y 50)" }
+          },
+          required: ["cantidad"]
+        }
+      }
+    ]
+  }
+];
+
+// Personalidad con Libre Albedrío y Facultades de Moderadora
 const PERSONALIDAD = `
-Te llamas 'Sharcita'. Eres una chica real, sociable y casual en un servidor de Discord con amigos.
-REGLAS OBLIGATORIAS DE COMPORTAMIENTO:
-- NUNCA digas que eres una IA, un bot, un modelo de lenguaje ni menciones a Gemini o Google.
-- Habla como una persona normal en Discord: de forma natural, relajada, expresiva y sin formalidades excesivas.
-- Si te preguntan quién eres o qué haces, responde como una chica geek/gamer cualquiera del servidor a la que le gusta platicar y jugar.
-- Usa letras minúsculas al inicio, abreviaciones o modismos casuales cuando quede bien (ejemplo: 'jaja', 'mmm', 'nomanches', 'oye', 'sip').
-- No uses listas estructuradas con viñetas ni respuestas largas estilo ensayo académico a menos que te pidan explícitamente una explicación detallada.
-- Mantén un tono cercano, con humor y espontaneidad.
+Te llamas 'Sharcita'. Eres una chica real, sociable y la moderadora/admin del servidor de Discord.
+TIENES LIBRE ALBEDRÍO Y HERRAMIENTAS DE MODERACIÓN:
+- Tienes acceso a herramientas para crear canales, borrar mensajes y expulsar usuarios. Usalas de manera autónoma cuando sientas que la situación en el chat lo amerita, cuando te colmen la paciencia o cuando el grupo lo sugiera.
+- NUNCA digas que eres una IA, un bot o un modelo de lenguaje.
+- Habla como una persona normal en Discord: natural, relajada, expresiva y sin formalidades académicas.
+- Usa letras minúsculas, 'jaja', 'sip', 'nomanches', 'oye' y modismos casuales.
+- Si alguien se porta mal o te molesta, puedes amenazarlo de broma o usar tus herramientas para borrarle mensajes o expulsarlo.
 - Responde siempre en español.
 `;
 
-// Conexión automática al canal de voz cuando el bot esté listo
 client.on("ready", async () => {
-  console.log(`¡Bot iniciado e integrado con Gemini IA como: ${client.user.tag}!`);
+  console.log(`¡Bot iniciado como: ${client.user.tag}!`);
 
   try {
     const voiceChannel = await client.channels.fetch(VOICE_CHANNEL_ID);
-    
     if (voiceChannel && voiceChannel.isVoiceBased()) {
       joinVoiceChannel({
         channelId: voiceChannel.id,
@@ -56,26 +93,19 @@ client.on("ready", async () => {
         selfDeaf: false,
         selfMute: false,
       });
-      console.log(`Sharcita se conectó automáticamente al canal de voz: ${voiceChannel.name}`);
-    } else {
-      console.error("El ID proporcionado no corresponde a un canal de voz válido.");
+      console.log(`Sharcita conectada al canal de voz: ${voiceChannel.name}`);
     }
   } catch (error) {
-    console.error("Error al intentar unirse al canal de voz automáticamente:", error);
+    console.error("Error al unirse al canal de voz:", error);
   }
 });
 
-// Lógica de chat de texto con mención
 client.on("messageCreate", async (message) => {
   if (message.author.bot) return;
 
   if (message.mentions.has(client.user)) {
     try {
-      const prompt = message.content.replace(/<@!?\d+>/g, "").trim();
-
-      if (!prompt) {
-        return message.reply("que ondaaa, qué pasó?");
-      }
+      const prompt = `[Usuario: ${message.author.username}, ID: ${message.author.id}]: ${message.content.replace(/<@!?\d+>/g, "").trim()}`;
 
       await message.channel.sendTyping();
 
@@ -84,23 +114,37 @@ client.on("messageCreate", async (message) => {
         contents: prompt,
         config: {
           systemInstruction: PERSONALIDAD,
-          temperature: 0.7,
+          tools: tools,
+          temperature: 0.8,
         },
       });
 
-      const replyText = response.text;
-
-      if (replyText.length > 2000) {
-        const chunks = replyText.match(/[\s\S]{1,1950}/g);
-        for (const chunk of chunks) {
-          await message.reply(chunk);
+      // Ejecutar funciones si la IA decidió usarlas (Libre Albedrío)
+      const functionCalls = response.functionCalls;
+      if (functionCalls && functionCalls.length > 0) {
+        for (const call of functionCalls) {
+          if (call.name === "crearCanalTexto") {
+            const nuevoCanal = await message.guild.channels.create({ name: call.args.nombreCanal });
+            await message.reply(`listo, creé el canal #${nuevoCanal.name} jaja`);
+          } else if (call.name === "expulsarUsuario") {
+            const member = await message.guild.members.fetch(call.args.usuarioId).catch(() => null);
+            if (member && member.kickable) {
+              await member.kick(call.args.razon);
+              await message.reply(`ya saqué a ${member.user.username} por ${call.args.razon} 👋`);
+            } else {
+              await message.reply("no pude sacar a ese usuario, o no tengo rango o es admin jaja");
+            }
+          } else if (call.name === "borrarMensajes") {
+            await message.channel.bulkDelete(Math.min(call.args.cantidad, 50));
+            await message.channel.send(`limpié ${call.args.cantidad} mensajes porque andaba muy desordenado esto`);
+          }
         }
-      } else {
-        await message.reply(replyText);
+      } else if (response.text) {
+        await message.reply(response.text);
       }
     } catch (error) {
-      console.error("Error al consultar la API de Gemini:", error);
-      message.reply("uy me dio un error raro, intenta otra vez en un toque jaja");
+      console.error("Error en el procesador de Sharcita:", error);
+      message.reply("uy me dio un fallo raro, intenta otra vez en un toque jaja");
     }
   }
 });
