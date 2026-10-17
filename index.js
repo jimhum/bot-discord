@@ -1,95 +1,106 @@
-require('dotenv').config();
+const { GoogleGenAI } = require("@google/genai");
+const { Client, GatewayIntentBits } = require("discord.js");
+const { joinVoiceChannel } = require("@discordjs/voice");
+const http = require("http");
 
-const http = require('http');
-const { Client, GatewayIntentBits } = require('discord.js');
-const { joinVoiceChannel } = require('@discordjs/voice');
-const { GoogleGenAI } = require('@google/genai');
-
-// --- SERVIDOR WEB PARA MANTENER EL BOT GRATIS EN RENDER ---
-const PORT = process.env.PORT || 3000;
+// Servidor HTTP para Render
+const PORT = process.env.PORT || 10000;
 http.createServer((req, res) => {
-  res.writeHead(200, { 'Content-Type': 'text/plain' });
-  res.end('Bot de Discord activo 24/7');
+  res.writeHead(200, { "Content-Type": "text/plain" });
+  res.end("Bot de Discord activo 24/7\n");
 }).listen(PORT, () => {
   console.log(`Servidor HTTP activo en el puerto ${PORT}`);
 });
 
-// --- INICIALIZAR GEMINI AI ---
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+// ID del canal de voz
+const VOICE_CHANNEL_ID = "1560821561018028162";
 
+// Cliente de Discord con Intenciones de Voz activas
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
-    GatewayIntentBits.GuildVoiceStates
-  ]
+    GatewayIntentBits.GuildVoiceStates, // Requerido para ver canales de voz
+  ],
 });
 
-const esperar = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+// Configuración de la IA
+const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
-client.once('clientReady', async () => {
+// Personalidad Humana para Sharcita
+const PERSONALIDAD = `
+Te llamas 'Sharcita'. Eres una chica real, sociable y casual en un servidor de Discord con amigos.
+REGLAS OBLIGATORIAS DE COMPORTAMIENTO:
+- NUNCA digas que eres una IA, un bot, un modelo de lenguaje ni menciones a Gemini o Google.
+- Habla como una persona normal en Discord: de forma natural, relajada, expresiva y sin formalidades excesivas.
+- Si te preguntan quién eres o qué haces, responde como una chica geek/gamer cualquiera del servidor a la que le gusta platicar y jugar.
+- Usa letras minúsculas al inicio, abreviaciones o modismos casuales cuando quede bien (ejemplo: 'jaja', 'mmm', 'nomanches', 'oye', 'sip').
+- No uses listas estructuradas con viñetas ni respuestas largas estilo ensayo académico a menos que te pidan explícitamente una explicación detallada.
+- Mantén un tono cercano, con humor y espontaneidad.
+- Responde siempre en español.
+`;
+
+// Conexión automática al canal de voz cuando el bot esté listo
+client.on("ready", async () => {
   console.log(`¡Bot iniciado e integrado con Gemini IA como: ${client.user.tag}!`);
 
-  const ID_CANAL_TEXTO = '1560464461091835944';
-  const ID_CANAL_VOZ = '1559052581916119153';
-
   try {
-    const canalTexto = await client.channels.fetch(ID_CANAL_TEXTO);
-    if (canalTexto) {
-      await canalTexto.sendTyping();
-      await esperar(1500);
-     
-      await canalTexto.send('¡Hola!🙂');
-    }
-
-    const canalVoz = await client.channels.fetch(ID_CANAL_VOZ);
-    if (canalVoz) {
+    const voiceChannel = await client.channels.fetch(VOICE_CHANNEL_ID);
+    
+    if (voiceChannel && voiceChannel.isVoiceBased()) {
       joinVoiceChannel({
-        channelId: canalVoz.id,
-        guildId: canalVoz.guild.id,
-        adapterCreator: canalVoz.guild.voiceAdapterCreator,
+        channelId: voiceChannel.id,
+        guildId: voiceChannel.guild.id,
+        adapterCreator: voiceChannel.guild.voiceAdapterCreator,
         selfDeaf: false,
-        selfMute: false
+        selfMute: false,
       });
-      console.log(`Conectado al canal de voz: ${canalVoz.name}`);
+      console.log(`Sharcita se conectó automáticamente al canal de voz: ${voiceChannel.name}`);
+    } else {
+      console.error("El ID proporcionado no corresponde a un canal de voz válido.");
     }
   } catch (error) {
-    console.error('Error al iniciar los canales:', error.message);
+    console.error("Error al intentar unirse al canal de voz automáticamente:", error);
   }
 });
 
-client.on('messageCreate', async (message) => {
+// Lógica de chat de texto con mención
+client.on("messageCreate", async (message) => {
   if (message.author.bot) return;
 
-  const esMencionado = message.mentions.has(client.user.id);
-  const esDM = !message.guild;
-
-  if (esMencionado || esDM) {
+  if (message.mentions.has(client.user)) {
     try {
-      await message.channel.sendTyping();
+      const prompt = message.content.replace(/<@!?\d+>/g, "").trim();
 
-      const textoLimpio = message.content.replace(/<@!?\d+>/g, '').trim();
-
-      if (!textoLimpio) {
-        return message.reply('¿En qué te puedo ayudar?');
+      if (!prompt) {
+        return message.reply("que ondaaa, qué pasó?");
       }
 
+      await message.channel.sendTyping();
+
       const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: textoLimpio,
+        model: "gemini-2.5-flash",
+        contents: prompt,
         config: {
-          systemInstruction: 'Eres un usuario amigable e informal en un servidor de Discord. Responde de forma concisa, corta (máximo 2 o 3 oraciones) y natural, sin usar formatos estructurados ni listas largas a menos que te lo pidan explícitamente y te llamas Sharcita y tienes 18 años y no rolees .'
-        }
+          systemInstruction: PERSONALIDAD,
+          temperature: 0.7,
+        },
       });
 
-      const respuestaIA = response.text;
+      const replyText = response.text;
 
-      await esperar(1500);
-      await message.reply(respuestaIA);
+      if (replyText.length > 2000) {
+        const chunks = replyText.match(/[\s\S]{1,1950}/g);
+        for (const chunk of chunks) {
+          await message.reply(chunk);
+        }
+      } else {
+        await message.reply(replyText);
+      }
     } catch (error) {
-      console.error('Error con la API de Gemini:', error);
-      await message.reply('Ups, me dio un pequeño cortocircuito. Intenta de nuevo en un momento.');
+      console.error("Error al consultar la API de Gemini:", error);
+      message.reply("uy me dio un error raro, intenta otra vez en un toque jaja");
     }
   }
 });
