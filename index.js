@@ -1,21 +1,23 @@
 const { GoogleGenAI, Type } = require("@google/genai");
 const { Client, GatewayIntentBits } = require("discord.js");
-const { joinVoiceChannel } = require("@discordjs/voice");
+const { joinVoiceChannel, VoiceConnectionStatus } = require("@discordjs/voice");
 const http = require("http");
 
-// Servidor HTTP obligatorio para mantener la instancia viva en Render
+// Servidor HTTP obligatorio para mantener el Web Service vivo en Render
 const PORT = process.env.PORT || 10000;
-http.createServer((req, res) => {
+const server = http.createServer((req, res) => {
   res.writeHead(200, { "Content-Type": "text/plain" });
   res.end("Bot de Discord activo 24/7\n");
-}).listen(PORT, () => {
+});
+
+server.listen(PORT, () => {
   console.log(`Servidor HTTP activo en el puerto ${PORT}`);
 });
 
 // ID del canal de voz
 const VOICE_CHANNEL_ID = "1560821561018028162";
 
-// Inicialización del cliente de Discord con todos los intents necesarios
+// Inicialización del cliente de Discord
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -84,10 +86,11 @@ REGLAS OBLIGATORIAS DE COMPORTAMIENTO:
 - Responde siempre en español.
 `;
 
-// Conexión segura al canal de voz al iniciar
-client.on("ready", async () => {
+// Uso de clientReady para evitar advertencias en Discord.js v15
+client.on("clientReady", async () => {
   console.log(`¡Bot iniciado exitosamente como: ${client.user.tag}!`);
 
+  // Intentar la conexión de voz de manera aislada y protegida
   try {
     const voiceChannel = await client.channels.fetch(VOICE_CHANNEL_ID).catch(() => null);
     
@@ -100,17 +103,29 @@ client.on("ready", async () => {
         selfMute: false,
       });
 
-      connection.on("error", (error) => {
-        console.error("Error capturado en la conexión de voz:", error);
+      // Escuchar errores de conexión sin detener la aplicación
+      connection.on("error", (err) => {
+        console.warn("Aviso de red en canal de voz (no crítico):", err.message);
       });
 
-      console.log(`Sharcita se conectó al canal de voz: ${voiceChannel.name}`);
-    } else {
-      console.warn(`No se encontró un canal de voz válido con la ID: ${VOICE_CHANNEL_ID}`);
+      connection.on(VoiceConnectionStatus.Disconnected, () => {
+        console.warn("Desconectado del canal de voz. El bot sigue operando en texto.");
+      });
+
+      console.log(`Intentando mantener conexión en el canal de voz: ${voiceChannel.name}`);
     }
   } catch (error) {
-    console.error("Error al intentar unirse al canal de voz:", error);
+    console.warn("No se pudo conectar al canal de voz, pero el bot continúa activo:", error.message);
   }
+});
+
+// Manejo central de errores no capturados para que el servidor nunca colapse
+process.on("uncaughtException", (err) => {
+  console.error("Excepción capturada para prevenir caída:", err.message);
+});
+
+process.on("unhandledRejection", (reason) => {
+  console.error("Rechazo no manejado para prevenir caída:", reason);
 });
 
 // Lógica principal de mensajes y libre albedrío
@@ -133,7 +148,6 @@ client.on("messageCreate", async (message) => {
         },
       });
 
-      // Procesamiento de herramientas (Function Calling)
       const functionCalls = response.functionCalls;
       if (functionCalls && functionCalls.length > 0) {
         for (const call of functionCalls) {
@@ -150,7 +164,7 @@ client.on("messageCreate", async (message) => {
             }
           } else if (call.name === "borrarMensajes") {
             await message.channel.bulkDelete(Math.min(call.args.cantidad, 50));
-            await message.channel.send(`limpié ${call.args.cantidad} mensajes porque andaba muy desordenado esto`);
+            await message.channel.send(`limpié ${call.args.cantidad} mensajes porque perception andaba muy desordenado esto`);
           }
         }
       } else if (response.text) {
