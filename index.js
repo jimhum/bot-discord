@@ -3,7 +3,7 @@ const { Client, GatewayIntentBits } = require("discord.js");
 const { joinVoiceChannel, VoiceConnectionStatus } = require("@discordjs/voice");
 const http = require("http");
 
-// Servidor HTTP obligatorio para mantener el Web Service vivo en Render
+// Servidor HTTP obligatorio para mantener el Web Service activo en Render
 const PORT = process.env.PORT || 10000;
 const server = http.createServer((req, res) => {
   res.writeHead(200, { "Content-Type": "text/plain" });
@@ -98,7 +98,7 @@ client.on("clientReady", async () => {
         channelId: voiceChannel.id,
         guildId: voiceChannel.guild.id,
         adapterCreator: voiceChannel.guild.voiceAdapterCreator,
-        selfDeaf: false,
+        selfDeaf: true,
         selfMute: false,
       });
 
@@ -126,7 +126,7 @@ process.on("unhandledRejection", (reason) => {
   console.error("Promesa rechazada capturada para prevenir caída:", reason);
 });
 
-// Lógica de mensajes y moderación
+// Lógica de mensajes y moderación con fallback automático
 client.on("messageCreate", async (message) => {
   if (message.author.bot) return;
 
@@ -136,16 +136,32 @@ client.on("messageCreate", async (message) => {
 
       await message.channel.sendTyping();
 
-      // Cambiado a gemini-2.0-flash para cuota amplia diaria
-      const response = await ai.models.generateContent({
-        model: "gemini-2.0-flash",
-        contents: prompt,
-        config: {
-          systemInstruction: PERSONALIDAD,
-          tools: tools,
-          temperature: 0.8,
-        },
-      });
+      let response;
+      
+      // Intento principal con gemini-2.0-flash
+      try {
+        response = await ai.models.generateContent({
+          model: "gemini-2.0-flash",
+          contents: prompt,
+          config: {
+            systemInstruction: PERSONALIDAD,
+            tools: tools,
+            temperature: 0.8,
+          },
+        });
+      } catch (errModel1) {
+        console.warn("Fallo gemini-2.0-flash, reintentando con gemini-2.5-flash...", errModel1.message);
+        // Fallback secundario si el primero falla
+        response = await ai.models.generateContent({
+          model: "gemini-2.5-flash",
+          contents: prompt,
+          config: {
+            systemInstruction: PERSONALIDAD,
+            tools: tools,
+            temperature: 0.8,
+          },
+        });
+      }
 
       const functionCalls = response.functionCalls;
       if (functionCalls && functionCalls.length > 0) {
@@ -202,11 +218,11 @@ client.on("messageCreate", async (message) => {
         }
       }
     } catch (error) {
-      console.error("Error al procesar mensaje:", error);
-      if (error.status === 429) {
-        message.reply("uy me quedé sin pila por hoy (límite de peticiones de la API), dame un rato o cambia la API Key jaja");
+      console.error("Error detallado en la API de Gemini:", error);
+      if (error.status === 429 || error.message.includes("quota")) {
+        message.reply("uy se agotó la cuota de la API Key en Google AI Studio. Crea una API Key en un PROYECTO NUEVO en Render jaja");
       } else {
-        message.reply("uy me dio un error raro, intenta otra vez en un toque jaja");
+        message.reply("uy me dio un error raro con la API Key, revisa la variable de entorno en Render jaja");
       }
     }
   }
