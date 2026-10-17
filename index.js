@@ -86,11 +86,11 @@ REGLAS OBLIGATORIAS DE COMPORTAMIENTO:
 - Responde siempre en español.
 `;
 
-// Uso de clientReady para evitar advertencias en Discord.js v15
+// Uso de clientReady para evitar advertencias de deprecación
 client.on("clientReady", async () => {
   console.log(`¡Bot iniciado exitosamente como: ${client.user.tag}!`);
 
-  // Intentar la conexión de voz de manera aislada y protegida
+  // Conexión de voz aislada para evitar caídas
   try {
     const voiceChannel = await client.channels.fetch(VOICE_CHANNEL_ID).catch(() => null);
     
@@ -103,32 +103,31 @@ client.on("clientReady", async () => {
         selfMute: false,
       });
 
-      // Escuchar errores de conexión sin detener la aplicación
       connection.on("error", (err) => {
-        console.warn("Aviso de red en canal de voz (no crítico):", err.message);
+        console.warn("Aviso en canal de voz (no crítico):", err.message);
       });
 
       connection.on(VoiceConnectionStatus.Disconnected, () => {
-        console.warn("Desconectado del canal de voz. El bot sigue operando en texto.");
+        console.warn("Desconectado de voz. El bot sigue operando en texto.");
       });
 
-      console.log(`Intentando mantener conexión en el canal de voz: ${voiceChannel.name}`);
+      console.log(`Conectado al canal de voz: ${voiceChannel.name}`);
     }
   } catch (error) {
-    console.warn("No se pudo conectar al canal de voz, pero el bot continúa activo:", error.message);
+    console.warn("No se pudo conectar a voz, pero el bot continúa activo en texto:", error.message);
   }
 });
 
-// Manejo central de errores no capturados para que el servidor nunca colapse
+// CAPTURA DE ERRORES GLOBALES: Mantiene el bot vivo pase lo que pase
 process.on("uncaughtException", (err) => {
   console.error("Excepción capturada para prevenir caída:", err.message);
 });
 
 process.on("unhandledRejection", (reason) => {
-  console.error("Rechazo no manejado para prevenir caída:", reason);
+  console.error("Promesa rechazada capturada para prevenir caída:", reason);
 });
 
-// Lógica principal de mensajes y libre albedrío
+// Lógica de mensajes y moderación
 client.on("messageCreate", async (message) => {
   if (message.author.bot) return;
 
@@ -148,23 +147,49 @@ client.on("messageCreate", async (message) => {
         },
       });
 
+      // Procesamiento seguro de herramientas (Function Calling)
       const functionCalls = response.functionCalls;
       if (functionCalls && functionCalls.length > 0) {
         for (const call of functionCalls) {
           if (call.name === "crearCanalTexto") {
-            const nuevoCanal = await message.guild.channels.create({ name: call.args.nombreCanal });
-            await message.reply(`listo, ya creé el canal #${nuevoCanal.name} jaja`);
+            try {
+              // Limpiar el nombre para que cumpla los requisitos estricto de Discord
+              let nombreLimpio = call.args.nombreCanal
+                .toLowerCase()
+                .normalize("NFD").replace(/[\u0300-\u036f]/g, "") // Quitar acentos
+                .replace(/[^a-z0-9\s-]/g, "") // Eliminar símbolos raros como ღ
+                .trim()
+                .replace(/\s+/g, "-"); // Reemplazar espacios por guiones
+
+              if (!nombreLimpio) nombreLimpio = "sala-de-sharcita";
+
+              const nuevoCanal = await message.guild.channels.create({ name: nombreLimpio });
+              await message.reply(`listo, ya creé el canal <#${nuevoCanal.id}> jaja`);
+            } catch (errCanal) {
+              console.error("Error al crear canal:", errCanal);
+              await message.reply("uy no pude crear el canal, revisa si mi rol tiene el permiso de Gestionar Canales jaja");
+            }
           } else if (call.name === "expulsarUsuario") {
-            const member = await message.guild.members.fetch(call.args.usuarioId).catch(() => null);
-            if (member && member.kickable) {
-              await member.kick(call.args.razon);
-              await message.reply(`ya saqué a ${member.user.username} por ${call.args.razon} 👋`);
-            } else {
-              await message.reply("no pude sacar a ese usuario, o no tengo rango o es admin jaja");
+            try {
+              const member = await message.guild.members.fetch(call.args.usuarioId).catch(() => null);
+              if (member && member.kickable) {
+                await member.kick(call.args.razon);
+                await message.reply(`ya saqué a ${member.user.username} por ${call.args.razon} 👋`);
+              } else {
+                await message.reply("no pude sacar a ese usuario, o no tengo suficiente rango o es admin jaja");
+              }
+            } catch (errKick) {
+              console.error("Error al expulsar:", errKick);
+              await message.reply("no tengo permisos para expulsar a ese usuario jaja");
             }
           } else if (call.name === "borrarMensajes") {
-            await message.channel.bulkDelete(Math.min(call.args.cantidad, 50));
-            await message.channel.send(`limpié ${call.args.cantidad} mensajes porque perception andaba muy desordenado esto`);
+            try {
+              await message.channel.bulkDelete(Math.min(call.args.cantidad, 50));
+              await message.channel.send(`limpié ${call.args.cantidad} mensajes porque andaba muy desordenado esto`);
+            } catch (errBorrar) {
+              console.error("Error al borrar mensajes:", errBorrar);
+              await message.reply("no pude borrar los mensajes, asegúrate de que tengan menos de 14 días jaja");
+            }
           }
         }
       } else if (response.text) {
@@ -179,7 +204,7 @@ client.on("messageCreate", async (message) => {
         }
       }
     } catch (error) {
-      console.error("Error en la ejecución de Sharcita:", error);
+      console.error("Error al procesar mensaje:", error);
       message.reply("uy me dio un error raro, intenta otra vez en un toque jaja");
     }
   }
