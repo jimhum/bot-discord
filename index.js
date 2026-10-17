@@ -86,11 +86,10 @@ REGLAS OBLIGATORIAS DE COMPORTAMIENTO:
 - Responde siempre en español.
 `;
 
-// Uso de clientReady para evitar advertencias de deprecación
+// Evento listo del cliente
 client.on("clientReady", async () => {
   console.log(`¡Bot iniciado exitosamente como: ${client.user.tag}!`);
 
-  // Conexión de voz aislada para evitar caídas
   try {
     const voiceChannel = await client.channels.fetch(VOICE_CHANNEL_ID).catch(() => null);
     
@@ -118,7 +117,7 @@ client.on("clientReady", async () => {
   }
 });
 
-// CAPTURA DE ERRORES GLOBALES: Mantiene el bot vivo pase lo que pase
+// Captura global de excepciones
 process.on("uncaughtException", (err) => {
   console.error("Excepción capturada para prevenir caída:", err.message);
 });
@@ -137,8 +136,9 @@ client.on("messageCreate", async (message) => {
 
       await message.channel.sendTyping();
 
+      // Cambiado a gemini-2.0-flash para cuota amplia diaria
       const response = await ai.models.generateContent({
-        model: "gemini-2.5-flash",
+        model: "gemini-2.0-flash",
         contents: prompt,
         config: {
           systemInstruction: PERSONALIDAD,
@@ -147,19 +147,17 @@ client.on("messageCreate", async (message) => {
         },
       });
 
-      // Procesamiento seguro de herramientas (Function Calling)
       const functionCalls = response.functionCalls;
       if (functionCalls && functionCalls.length > 0) {
         for (const call of functionCalls) {
           if (call.name === "crearCanalTexto") {
             try {
-              // Limpiar el nombre para que cumpla los requisitos estricto de Discord
               let nombreLimpio = call.args.nombreCanal
                 .toLowerCase()
-                .normalize("NFD").replace(/[\u0300-\u036f]/g, "") // Quitar acentos
-                .replace(/[^a-z0-9\s-]/g, "") // Eliminar símbolos raros como ღ
+                .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+                .replace(/[^a-z0-9\s-]/g, "")
                 .trim()
-                .replace(/\s+/g, "-"); // Reemplazar espacios por guiones
+                .replace(/\s+/g, "-");
 
               if (!nombreLimpio) nombreLimpio = "sala-de-sharcita";
 
@@ -205,7 +203,11 @@ client.on("messageCreate", async (message) => {
       }
     } catch (error) {
       console.error("Error al procesar mensaje:", error);
-      message.reply("uy me dio un error raro, intenta otra vez en un toque jaja");
+      if (error.status === 429) {
+        message.reply("uy me quedé sin pila por hoy (límite de peticiones de la API), dame un rato o cambia la API Key jaja");
+      } else {
+        message.reply("uy me dio un error raro, intenta otra vez en un toque jaja");
+      }
     }
   }
 });
