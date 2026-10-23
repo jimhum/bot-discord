@@ -33,8 +33,8 @@ const client = new Client({
 // Inicialización de la API de Gemini
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
-// Archivo local para persistencia de memoria de usuarios
-const MEMORIA_FILE = path.join(__dirname, "memorias.json");
+// Manejo seguro del archivo de memoria de usuarios
+const MEMORIA_FILE = path.join("/tmp", "memorias.json"); // Usar /tmp en Render para escrituras temporales
 
 function cargarMemorias() {
   try {
@@ -43,7 +43,7 @@ function cargarMemorias() {
       return JSON.parse(data);
     }
   } catch (err) {
-    console.error("Error al cargar archivo de memorias:", err);
+    console.warn("Aviso al cargar memorias (no crítico):", err.message);
   }
   return {};
 }
@@ -58,7 +58,7 @@ function guardarMemoriaUsuario(usuarioId, info) {
     };
     fs.writeFileSync(MEMORIA_FILE, JSON.stringify(memorias, null, 2), "utf8");
   } catch (err) {
-    console.error("Error al guardar memoria de usuario:", err);
+    console.warn("Aviso al guardar memoria (no crítico):", err.message);
   }
 }
 
@@ -103,7 +103,7 @@ const tools = [
       },
       {
         name: "guardarDatoUsuario",
-        description: "Guarda un dato relevante sobre un usuario para recordarlo en el futuro (gustos, juegos, apodos, personalidad).",
+        description: "Guarda un dato relevante sobre un usuario para recordarlo en el futuro.",
         parameters: {
           type: Type.OBJECT,
           properties: {
@@ -185,7 +185,7 @@ async function obtenerPartesDeImagen(message) {
   return partes;
 }
 
-// Conexión a voz sin ensordecer ni mutear
+// Conexión de voz defensiva (sin mute ni ensordecer)
 async function conectarCanalVoz() {
   try {
     const voiceChannel = await client.channels.fetch(VOICE_CHANNEL_ID).catch(() => null);
@@ -195,8 +195,8 @@ async function conectarCanalVoz() {
         channelId: voiceChannel.id,
         guildId: voiceChannel.guild.id,
         adapterCreator: voiceChannel.guild.voiceAdapterCreator,
-        selfDeaf: false, // NO se ensordece
-        selfMute: false, // NO se mutea
+        selfDeaf: false,
+        selfMute: false,
       });
 
       connection.on("error", (err) => {
@@ -228,29 +228,31 @@ client.on("clientReady", async () => {
   await conectarCanalVoz();
 });
 
-process.on("uncaughtException", (err) => console.error("Excepción capturada:", err.message));
-process.on("unhandledRejection", (reason) => console.error("Rechazo no manejado:", reason));
+// Captura total de errores no controlados para impedir apagados
+process.on("uncaughtException", (err) => {
+  console.error("Excepción capturada para prevenir caída:", err.message);
+});
+
+process.on("unhandledRejection", (reason) => {
+  console.error("Promesa rechazada capturada para prevenir caída:", reason);
+});
 
 client.on("messageCreate", async (message) => {
   if (message.author.bot) return;
 
   const esMencion = message.mentions.has(client.user);
-  // 8% de probabilidad de intervenir espontáneamente si no hay mención directa
   const esIntervencionCasual = !esMencion && Math.random() < 0.08;
 
   if (esMencion || esIntervencionCasual) {
     try {
-      // Detección de Horario de Sueño (3:00 AM a 8:00 AM)
       const horaActual = new Date().getHours();
       const esMadrugada = horaActual >= 3 && horaActual < 8;
 
-      // Cargar recuerdos guardados sobre el usuario
       const memoriasCargadas = cargarMemorias();
       const memoriaUsuario = memoriasCargadas[message.author.id] 
         ? JSON.stringify(memoriasCargadas[message.author.id]) 
         : "Sin datos registrados aún.";
 
-      // Capturar los últimos 10 mensajes del canal para el contexto
       const historialMensajes = await message.channel.messages.fetch({ limit: 10 }).catch(() => null);
       let contextoChat = "--- HISTORIAL RECIENTE DEL CANAL ---\n";
 
@@ -300,7 +302,6 @@ client.on("messageCreate", async (message) => {
         });
       }
 
-      // Procesamiento de herramientas (Function Calling)
       const functionCalls = response.functionCalls;
       if (functionCalls && functionCalls.length > 0) {
         for (const call of functionCalls) {
@@ -368,11 +369,8 @@ client.on("messageCreate", async (message) => {
         }
       }
 
-      // Respuesta de texto con simulación de tecleo humano
       if (response.text) {
         const replyText = response.text;
-        
-        // Retraso de tecleo dinámico: ~35 ms por carácter (mínimo 1s, máximo 4s)
         const delayTecleo = Math.min(Math.max(replyText.length * 35, 1000), 4000);
         
         setTimeout(async () => {
