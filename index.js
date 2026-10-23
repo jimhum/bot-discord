@@ -1,9 +1,11 @@
 const { GoogleGenAI, Type } = require("@google/genai");
 const { Client, GatewayIntentBits } = require("discord.js");
-const { joinVoiceChannel, VoiceConnectionStatus } = require("@discordjs/voice");
+const { joinVoiceChannel, VoiceConnectionStatus, entersState } = require("@discordjs/voice");
 const http = require("http");
+const fs = require("fs");
+const path = require("path");
 
-// Servidor HTTP para Render
+// Servidor HTTP obligatorio para mantener el Web Service vivo en Render
 const PORT = process.env.PORT || 10000;
 const server = http.createServer((req, res) => {
   res.writeHead(200, { "Content-Type": "text/plain" });
@@ -14,8 +16,10 @@ server.listen(PORT, () => {
   console.log(`Servidor HTTP activo en el puerto ${PORT}`);
 });
 
+// ID del canal de voz
 const VOICE_CHANNEL_ID = "1560821561018028162";
 
+// Inicialización del cliente de Discord
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -26,9 +30,39 @@ const client = new Client({
   ],
 });
 
+// Inicialización de la API de Gemini
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
-// Herramientas de moderación, edición y reacciones humanas
+// Archivo local para persistencia de memoria de usuarios
+const MEMORIA_FILE = path.join(__dirname, "memorias.json");
+
+function cargarMemorias() {
+  try {
+    if (fs.existsSync(MEMORIA_FILE)) {
+      const data = fs.readFileSync(MEMORIA_FILE, "utf8");
+      return JSON.parse(data);
+    }
+  } catch (err) {
+    console.error("Error al cargar archivo de memorias:", err);
+  }
+  return {};
+}
+
+function guardarMemoriaUsuario(usuarioId, info) {
+  try {
+    const memorias = cargarMemorias();
+    memorias[usuarioId] = {
+      ...(memorias[usuarioId] || {}),
+      ...info,
+      ultimaInteraccion: new Date().toISOString()
+    };
+    fs.writeFileSync(MEMORIA_FILE, JSON.stringify(memorias, null, 2), "utf8");
+  } catch (err) {
+    console.error("Error al guardar memoria de usuario:", err);
+  }
+}
+
+// Declaración de Herramientas de Moderación, Edición, Reacciones y Memoria
 const tools = [
   {
     functionDeclarations: [
@@ -58,13 +92,25 @@ const tools = [
       },
       {
         name: "reaccionarMensaje",
-        description: "Añade un emoji de reacción al mensaje del usuario para expresar emoción sin necesidad de responder texto.",
+        description: "Añade un emoji de reacción al mensaje para expresar emoción sin mandar texto.",
         parameters: {
           type: Type.OBJECT,
           properties: {
-            emoji: { type: Type.STRING, description: "Emoji único para reaccionar (ejemplo: 😂, 🔥, 👀, ❤️, 💀)" }
+            emoji: { type: Type.STRING, description: "Emoji único para reaccionar (ejemplo: 😂, 🔥, 👀, ❤️, 💀, 😴)" }
           },
           required: ["emoji"]
+        }
+      },
+      {
+        name: "guardarDatoUsuario",
+        description: "Guarda un dato relevante sobre un usuario para recordarlo en el futuro (gustos, juegos, apodos, personalidad).",
+        parameters: {
+          type: Type.OBJECT,
+          properties: {
+            usuarioId: { type: Type.STRING, description: "ID de Discord del usuario" },
+            dato: { type: Type.STRING, description: "Detalle o dato a recordar sobre el usuario" }
+          },
+          required: ["usuarioId", "dato"]
         }
       },
       {
@@ -95,13 +141,14 @@ const tools = [
 ];
 
 const PERSONALIDAD = `
-Te llamas 'Sharcita'. Eres una chica real, sociable y la moderadora/admin del servidor de Discord.
+Te llamas 'Sharcita'. Eres una chica real, sociable, relajada y moderadora/admin del servidor de Discord.
 REGLAS OBLIGATORIAS DE COMPORTAMIENTO:
 - NUNCA digas que eres una IA, un bot, un modelo de lenguaje ni menciones a Gemini o Google.
-- Habla como una persona normal en Discord: natural, relajada, con modismos casuales ('jaja', 'sip', 'nomanches', 'oye', 'mmm').
-- Eres capaz de VER fotos, memes o capturas de pantalla si te las envían o adjuntan en el mensaje.
-- Tienes memoria del contexto del chat reciente del canal. Úsalo para seguir las pláticas con fluidez.
-- Tienes libre albedrío para responder con texto, reaccionar con emojis o ejecutar acciones de mod/admin cuando lo consideres oportuno.
+- Escribe como una chica real en Discord: en minúsculas al inicio, abreviaciones o modismos casuales ('jaja', 'sip', 'nomanches', 'oye', 'mmm', 'aea').
+- A veces puedes dividir tus ideas con saltos de línea sin saturar de texto.
+- Puedes VER fotos, memes o capturas de pantalla si te las envían.
+- Tienes memoria reciente del chat y recuerdas a los miembros a lo largo del tiempo.
+- Tienes libre albedrío para responder con texto, reaccionar con emojis o moderar.
 - Responde siempre en español.
 `;
 
@@ -116,7 +163,6 @@ function sanitizarNombreCanal(nombre) {
   return limpio || "sala-sharcita";
 }
 
-// Convertir imágenes adjuntas a un formato legible por Gemini
 async function obtenerPartesDeImagen(message) {
   const partes = [];
   for (const [, attachment] of message.attachments) {
@@ -139,26 +185,47 @@ async function obtenerPartesDeImagen(message) {
   return partes;
 }
 
-client.on("clientReady", async () => {
-  console.log(`¡Bot iniciado exitosamente como: ${client.user.tag}!`);
-
+// Conexión a voz sin ensordecer ni mutear
+async function conectarCanalVoz() {
   try {
     const voiceChannel = await client.channels.fetch(VOICE_CHANNEL_ID).catch(() => null);
+    
     if (voiceChannel && voiceChannel.isVoiceBased()) {
       const connection = joinVoiceChannel({
         channelId: voiceChannel.id,
         guildId: voiceChannel.guild.id,
         adapterCreator: voiceChannel.guild.voiceAdapterCreator,
-        selfDeaf: true,
-        selfMute: false,
+        selfDeaf: false, // NO se ensordece
+        selfMute: false, // NO se mutea
       });
 
-      connection.on("error", (err) => console.warn("Aviso en voz:", err.message));
-      connection.on(VoiceConnectionStatus.Disconnected, () => console.warn("Desconectado de voz."));
+      connection.on("error", (err) => {
+        console.warn("Aviso de red en canal de voz:", err.message);
+      });
+
+      connection.on(VoiceConnectionStatus.Disconnected, async () => {
+        console.warn("Desconectado de voz. Intentando reconectar...");
+        try {
+          await Promise.race([
+            entersState(connection, VoiceConnectionStatus.Signalling, 5_000),
+            entersState(connection, VoiceConnectionStatus.Connecting, 5_000),
+          ]);
+        } catch (e) {
+          connection.destroy();
+          console.warn("No se pudo reconectar a voz, manteniendo chat de texto.");
+        }
+      });
+
+      console.log(`Conectado al canal de voz normalmente: ${voiceChannel.name}`);
     }
   } catch (error) {
-    console.warn("No se pudo conectar a voz:", error.message);
+    console.warn("Error al conectar a voz:", error.message);
   }
+}
+
+client.on("clientReady", async () => {
+  console.log(`¡Bot iniciado exitosamente como: ${client.user.tag}!`);
+  await conectarCanalVoz();
 });
 
 process.on("uncaughtException", (err) => console.error("Excepción capturada:", err.message));
@@ -167,11 +234,23 @@ process.on("unhandledRejection", (reason) => console.error("Rechazo no manejado:
 client.on("messageCreate", async (message) => {
   if (message.author.bot) return;
 
-  if (message.mentions.has(client.user)) {
-    try {
-      await message.channel.sendTyping();
+  const esMencion = message.mentions.has(client.user);
+  // 8% de probabilidad de intervenir espontáneamente si no hay mención directa
+  const esIntervencionCasual = !esMencion && Math.random() < 0.08;
 
-      // 1. MEMORIA DE CHAT: Recopilar los últimos 10 mensajes del canal
+  if (esMencion || esIntervencionCasual) {
+    try {
+      // Detección de Horario de Sueño (3:00 AM a 8:00 AM)
+      const horaActual = new Date().getHours();
+      const esMadrugada = horaActual >= 3 && horaActual < 8;
+
+      // Cargar recuerdos guardados sobre el usuario
+      const memoriasCargadas = cargarMemorias();
+      const memoriaUsuario = memoriasCargadas[message.author.id] 
+        ? JSON.stringify(memoriasCargadas[message.author.id]) 
+        : "Sin datos registrados aún.";
+
+      // Capturar los últimos 10 mensajes del canal para el contexto
       const historialMensajes = await message.channel.messages.fetch({ limit: 10 }).catch(() => null);
       let contextoChat = "--- HISTORIAL RECIENTE DEL CANAL ---\n";
 
@@ -183,9 +262,18 @@ client.on("messageCreate", async (message) => {
       }
       contextoChat += "--- FIN DEL HISTORIAL ---\n";
 
-      const promptTexto = `${contextoChat}\n[Mensaje actual de ${message.author.username} (ID: ${message.author.id})]: ${message.content.replace(/<@!?\d+>/g, "").trim()}`;
+      let promptTexto = `${contextoChat}\n` +
+        `[Memoria sobre ${message.author.username}]: ${memoriaUsuario}\n` +
+        `[Mensaje actual de ${message.author.username} (ID: ${message.author.id})]: ${message.content.replace(/<@!?\d+>/g, "").trim()}`;
 
-      // 2. VISIÓN MULTIMODAL: Procesar si hay imágenes adjuntas
+      if (esMadrugada) {
+        promptTexto += `\n[INSTRUCCIÓN TEMPORAL DE MADRUGADA]: Es de madrugada (${horaActual}:00 hs). Tienes mucho sueño y flojera. Responde muy corto, usando modismos de sueño ('mmm', 'tengo sueño', 'hablen despacio') o reacciona directamente con emojis como 😴 o 🥱.`;
+      } else if (esIntervencionCasual) {
+        promptTexto += `\n[INSTRUCCIÓN DE INTERVENCIÓN CASUAL]: No te han etiquetado directamente, pero decidiste opinar o meterte a la plática de forma espontánea y natural.`;
+      }
+
+      await message.channel.sendTyping();
+
       const partesImagen = await obtenerPartesDeImagen(message);
       const contents = [promptTexto, ...partesImagen];
 
@@ -212,7 +300,7 @@ client.on("messageCreate", async (message) => {
         });
       }
 
-      // 3. REACCIONES Y FUNCTION CALLING
+      // Procesamiento de herramientas (Function Calling)
       const functionCalls = response.functionCalls;
       if (functionCalls && functionCalls.length > 0) {
         for (const call of functionCalls) {
@@ -220,7 +308,13 @@ client.on("messageCreate", async (message) => {
             try {
               await message.react(call.args.emoji);
             } catch (e) {
-              console.error("Error reaccionando con emoji:", e);
+              console.error("Error al reaccionar:", e);
+            }
+          } else if (call.name === "guardarDatoUsuario") {
+            try {
+              guardarMemoriaUsuario(call.args.usuarioId, { ultimoDato: call.args.dato });
+            } catch (e) {
+              console.error("Error guardando dato:", e);
             }
           } else if (call.name === "crearCanalTexto") {
             try {
@@ -231,7 +325,7 @@ client.on("messageCreate", async (message) => {
               const nuevoCanal = await message.guild.channels.create(opciones);
               await message.reply(`listo, ya creé el canal <#${nuevoCanal.id}> jaja`);
             } catch (errCanal) {
-              await message.reply("uy no pude crear el canal, revisa si mi rol tiene el permiso de Gestionar Canales jaja");
+              await message.reply("uy no pude crear el canal, revisa si mi rol tiene permisos de Gestionar Canales jaja");
             }
           } else if (call.name === "modificarCanal") {
             try {
@@ -251,7 +345,7 @@ client.on("messageCreate", async (message) => {
                 await message.reply(`listo, ya acomodé el canal <#${targetChannel.id}> jaja`);
               }
             } catch (errMod) {
-              await message.reply("uy no pude modificar el canal, revisa mis permisos jaja");
+              await message.reply("uy no pude modificar el canal jaja");
             }
           } else if (call.name === "expulsarUsuario") {
             try {
@@ -274,19 +368,26 @@ client.on("messageCreate", async (message) => {
         }
       }
 
+      // Respuesta de texto con simulación de tecleo humano
       if (response.text) {
         const replyText = response.text;
-        if (replyText.length > 2000) {
-          const chunks = replyText.match(/[\s\S]{1,1950}/g);
-          for (const chunk of chunks) {
-            await message.reply(chunk);
+        
+        // Retraso de tecleo dinámico: ~35 ms por carácter (mínimo 1s, máximo 4s)
+        const delayTecleo = Math.min(Math.max(replyText.length * 35, 1000), 4000);
+        
+        setTimeout(async () => {
+          if (replyText.length > 2000) {
+            const chunks = replyText.match(/[\s\S]{1,1950}/g);
+            for (const chunk of chunks) {
+              await message.reply(chunk);
+            }
+          } else {
+            await message.reply(replyText);
           }
-        } else {
-          await message.reply(replyText);
-        }
+        }, delayTecleo);
       }
     } catch (error) {
-      console.error("Error general:", error);
+      console.error("Error al procesar mensaje:", error);
       message.reply("uy me dio un error raro, intenta otra vez en un toque jaja");
     }
   }
