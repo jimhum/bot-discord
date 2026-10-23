@@ -391,15 +391,20 @@ client.on("messageCreate", async (message) => {
   }
 });
 
-// Inicio de sesión con captura explícita de errores para Render Logs
+// Limpieza automática del token antes de iniciar sesión
+const rawToken = process.env.DISCORD_TOKEN || "";
+const cleanToken = rawToken.replace(/^["']|["']$/g, "").trim();
+
 console.log("Intentando conectar con el cliente de Discord...");
-client.login(process.env.DISCORD_TOKEN)
-  .then(() => {
-    console.log("¡Conexión exitosa con el WebSocket de Discord!");
-  })
-  .catch((err) => {
-    console.error("CRÍTICO: Fallo al iniciar sesión en Discord:", err.message);
-    if (err.message.includes("TOKEN_INVALID")) {
-      console.error("EXPLICACIÓN: El DISCORD_TOKEN guardado en Render es incorrecto o está mal escrito.");
-    }
-  });
+
+if (!cleanToken) {
+  console.error("CRÍTICO: La variable DISCORD_TOKEN está vacía en Render.");
+} else {
+  client.login(cleanToken)
+    .then(() => {
+      console.log("¡Conexión exitosa con el WebSocket de Discord!");
+    })
+    .catch((err) => {
+      console.error("CRÍTICO: Fallo al iniciar sesión en Discord:", err.message);
+    });
+}
