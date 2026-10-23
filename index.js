@@ -3,6 +3,10 @@ const { Client, GatewayIntentBits } = require("discord.js");
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
+const dns = require("dns");
+
+// Forzar la resolución de nombres en IPv4 primero para evitar bloqueos en Render
+dns.setDefaultResultOrder("ipv4first");
 
 // Servidor HTTP obligatorio para Render
 const PORT = process.env.PORT || 10000;
@@ -15,6 +19,7 @@ server.listen(PORT, () => {
   console.log(`Servidor HTTP activo en el puerto ${PORT}`);
 });
 
+// Configuración del cliente con timeout explícito
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
@@ -22,6 +27,9 @@ const client = new Client({
     GatewayIntentBits.MessageContent,
     GatewayIntentBits.GuildMembers,
   ],
+  ws: {
+    timeout: 30000,
+  },
 });
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
@@ -63,7 +71,16 @@ const tools = [
 const PERSONALIDAD = `Te llamas 'Sharcita'. Eres una chica real, relajada y moderadora de Discord. Escribe casual, en minúsculas y sin decir que eres IA.`;
 
 client.on("clientReady", () => {
+  console.log(`=========================================`);
   console.log(`¡¡¡BOT EN LÍNEA EXITOSAMENTE COMO: ${client.user.tag}!!!`);
+  console.log(`=========================================`);
+});
+
+client.on("debug", (info) => {
+  // Imprime traza detallada del WebSocket para ver dónde se queda atascado
+  if (info.includes("Connecting") || info.includes("Session") || info.includes("Heartbeat") || info.includes("ERROR")) {
+    console.log(`[DISCORD DEBUG]: ${info}`);
+  }
 });
 
 process.on("uncaughtException", (err) => console.error("Error no capturado:", err.message));
@@ -95,7 +112,20 @@ client.on("messageCreate", async (message) => {
 const rawToken = process.env.DISCORD_TOKEN || "";
 const cleanToken = rawToken.replace(/^["']|["']$/g, "").trim();
 
-console.log("Iniciando login en Discord...");
+console.log("Iniciando login en Discord con soporte IPv4...");
+
+// Control de tiempo límite manual
+const loginTimeout = setTimeout(() => {
+  console.error("CRÍTICO: La conexión al WebSocket de Discord tardó más de 15 segundos. Reiniciando proceso...");
+  process.exit(1); // Fuerza a Render a reiniciar si se congela
+}, 15000);
+
 client.login(cleanToken)
-  .then(() => console.log("Login aceptado por Discord."))
-  .catch((err) => console.error("Error al loguear en Discord:", err.message));
+  .then(() => {
+    clearTimeout(loginTimeout);
+    console.log("Petición de login enviada al servidor de Discord.");
+  })
+  .catch((err) => {
+    clearTimeout(loginTimeout);
+    console.error("Error directo al autenticar en Discord:", err.message);
+  });
