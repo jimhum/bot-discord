@@ -1,3 +1,4 @@
+require('dotenv').config();
 const { GoogleGenAI, Type } = require("@google/genai");
 const { Client, GatewayIntentBits } = require("discord.js");
 const { joinVoiceChannel, VoiceConnectionStatus, entersState } = require("@discordjs/voice");
